@@ -8,10 +8,19 @@ RUN HUSKY=0 npm ci --omit=dev && npm cache clean --force
 COPY . /usr/src/app
 
 # Friday fork (AquaButler t_174e110e, 2026-10-08):
-# Patch @balena/pinejs compiled cache config to honor a runtime env knob
-# PINEJS_API_KEY_PERMISSIONS_CACHE_MAX_AGE_MS. With only one active api-key
-# (API_VPN_SERVICE_API_KEY) in this deployment, re-enabling the cache with a
-# 5-min TTL absorbs the contractSync contention window that was producing
+# Two small fork-side patches:
+#
+#   1. Cache config: patch @balena/pinejs's compiled env.js so the previously-
+#      hardcoded-false apiKeyPermissions cache slot respects
+#      PINEJS_API_KEY_PERMISSIONS_CACHE_MAX_AGE_MS at process startup.
+#
+#   2. Confd template: append the env var to config/confd/templates/env.tmpl
+#      so entry.sh's load_env_file (which only sees /usr/src/app/config/env,
+#      not the outer container process.env) actually receives it from the
+#      compose `environment:` block.
+#
+# With only the API_VPN_SERVICE_API_KEY in flight in this deployment, a single
+# cache slot absorbs the 5-min contractSync contention that was producing
 # ~1-2 PATCH /v6/service_instance(71) 401s per hour. Drops to 0 in the
 # acceptance criterion. See Hermes/Memory/Friday/2026-10-08-t_fbc6949a-...
 RUN set -eux; \
@@ -29,8 +38,19 @@ new = src.replace(
     1,
 )
 if new == src:
-    print("patch did not apply", file=sys.stderr); sys.exit(1)
+    print("cache config patch did not apply", file=sys.stderr); sys.exit(1)
 open(p, "w").write(new)
+
+# Confd template patch: append the new env var so load_env_file receives it.
+TMPL="/usr/src/app/config/confd/templates/env.tmpl"
+tsrc = open(TMPL).read()
+LINE = 'PINEJS_API_KEY_PERMISSIONS_CACHE_MAX_AGE_MS={{getenv "PINEJS_API_KEY_PERMISSIONS_CACHE_MAX_AGE_MS"}}'
+if LINE in tsrc:
+    print("confd template already patched, skipping"); sys.exit(0)
+if not tsrc.endswith("\n"):
+    tsrc += "\n"
+tsrc += LINE + "\n"
+open(TMPL, "w").write(tsrc)
 PY
 RUN npx tsc --noEmit --project ./tsconfig.build.json
 
