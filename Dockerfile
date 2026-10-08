@@ -8,7 +8,7 @@ RUN HUSKY=0 npm ci --omit=dev && npm cache clean --force
 COPY . /usr/src/app
 
 # Friday fork (AquaButler t_174e110e, 2026-10-08):
-# Two small fork-side patches:
+# Three small fork-side patches:
 #
 #   1. Cache config: patch @balena/pinejs's compiled env.js so the previously-
 #      hardcoded-false apiKeyPermissions cache slot respects
@@ -19,15 +19,28 @@ COPY . /usr/src/app
 #      not the outer container process.env) actually receives it from the
 #      compose `environment:` block.
 #
+#   3. Configure-balena.sh shim: install a copy of balena's upstream
+#      /usr/sbin/configure-balena.sh. The live openbalena_api service spec
+#      wraps the upstream's systemd-as-PID-1 chain with a Compose-mounted
+#      entrypoint script that does `source /usr/sbin/configure-balena.sh &&
+#      exec /usr/src/app/entry.sh`. The public-repo Dockerfile (which this
+#      fork is built from) uses s6-overlay + /etc/s6-overlay/scripts/, so
+#      /usr/sbin/configure-balena.sh is missing. Vendoring the upstream
+#      systemd-style script preserves the existing service spec without
+#      changing compose.
+#
 # With only the API_VPN_SERVICE_API_KEY in flight in this deployment, a single
 # cache slot absorbs the 5-min contractSync contention that was producing
 # ~1-2 PATCH /v6/service_instance(71) 401s per hour. Drops to 0 in the
 # acceptance criterion. See Hermes/Memory/Friday/2026-10-08-t_fbc6949a-...
 RUN set -eux; \
+    # 3. install configure-balena.sh shim at the path the live service expects; \
+    install -d -m 0755 /usr/sbin; \
+    install -m 0755 fork-patches/configure-balena.sh /usr/sbin/configure-balena.sh; \
     NODE_MODULES=/usr/src/app/node_modules/@balena/pinejs/out/config-loader/env.js; \
     grep -n "apiKeyPermissions: false" "$NODE_MODULES" || { echo "pinejs env.js layout changed; patch cannot apply" >&2; exit 1; }; \
     python3 - <<'PY'
-import re, sys
+import sys
 p = "/usr/src/app/node_modules/@balena/pinejs/out/config-loader/env.js"
 src = open(p).read()
 new = src.replace(
